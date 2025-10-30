@@ -1,8 +1,5 @@
 # AGENTS.md (repo guide)
 
-## Todo
-- [ ] Add a download script to download `emojitweets-01-04-2018.txt` into `data/raw` if possible or add instructions in README
-
 ## Build/Test
 - Install: `uv sync --group dev` (or `pip install -e . && pip install pytest`).
 - Run all tests: `uv run pytest -q`.

@@ -1,9 +1,43 @@
 # AGENTS.md (repo guide)
 
+## TODO
+1. Added stratified splits to preprocess to avoid the following error.
+```
+Traceback (most recent call last):
+  File "/home/manideep/Documents/code/personal/aimoji/.venv/lib/python3.12/site-packages/sklearn/utils/_encode.py", line 235, in _encode
+    return _map_to_integer(values, uniques)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/manideep/Documents/code/personal/aimoji/.venv/lib/python3.12/site-packages/sklearn/utils/_encode.py", line 174, in _map_to_integer
+    return xp.asarray([table[v] for v in values], device=device(values))
+                       ~~~~~^^^
+  File "/home/manideep/Documents/code/personal/aimoji/.venv/lib/python3.12/site-packages/sklearn/utils/_encode.py", line 167, in __missing__
+    raise KeyError(key)
+KeyError: np.str_('🗲')
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/manideep/Documents/code/personal/aimoji/src/train.py", line 142, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/home/manideep/Documents/code/personal/aimoji/src/train.py", line 85, in main
+    y_eval_ids = np.asarray(le.transform(y_eval))
+                            ^^^^^^^^^^^^^^^^^^^^
+  File "/home/manideep/Documents/code/personal/aimoji/.venv/lib/python3.12/site-packages/sklearn/preprocessing/_label.py", line 134, in transform
+    return _encode(y, uniques=self.classes_)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/manideep/Documents/code/personal/aimoji/.venv/lib/python3.12/site-packages/sklearn/utils/_encode.py", line 237, in _encode
+    raise ValueError(f"y contains previously unseen labels: {e}")
+ValueError: y contains previously unseen labels: np.str_('🗲')
+```
+
+2. Added a sanity check at the start of train.py as well
+
+But both are WIP. Not sure if they are running
+
 ## Build/Test
 - Install: `uv sync --group dev` (or `pip install -e . && pip install pytest`).
 - Run all tests: `uv run pytest -q`.
-- Run one test: `uv run pytest -q tests/test_preprocess.py::test_repeated_emoji_collapsed` (or `-k <expr>`).
 - No build step; Python 3.12 runtime.
 
 ## Code Style

@@ -23,15 +23,16 @@ Notes:
 - Requires `regex` for Unicode grapheme clusters (\\X).
 """
 
-
-
 import argparse
 import os
 import sys
 from dataclasses import dataclass
+from datasets import Dataset
 from typing import Iterable, List, Tuple, cast
 
+
 import regex as re  # type: ignore
+
 _RE_GRAPHEME = re.compile(r"\X")
 
 
@@ -54,19 +55,54 @@ _EMOJI_RANGES = (
     (0x1F900, 0x1F9FF),  # Supplemental Symbols and Pictographs
     (0x1FA00, 0x1FA6F),  # Chess Symbols, etc.
     (0x1FA70, 0x1FAFF),  # Symbols and Pictographs Extended-A
-    (0x2600,  0x26FF),   # Misc symbols
-    (0x2700,  0x27BF),   # Dingbats
+    (0x2600, 0x26FF),  # Misc symbols
+    (0x2700, 0x27BF),  # Dingbats
 )
 
 # Some extra characters commonly involved in emoji sequences (keycap base)
 _EXTRA_EMOJI_CHARS = {
     0x0023,  # '#'
     0x002A,  # '*'
-    0x0030, 0x0031, 0x0032, 0x0033, 0x0034, 0x0035, 0x0036, 0x0037, 0x0038, 0x0039,  # 0-9
-    0x203C, 0x2049, 0x2122, 0x2139,
-    0x2194, 0x2195, 0x2196, 0x2197, 0x2198, 0x2199, 0x21A9, 0x21AA,
-    0x231A, 0x231B, 0x2328, 0x23CF, 0x23E9, 0x23EA, 0x23EB, 0x23EC, 0x23ED,
-    0x23EE, 0x23EF, 0x23F0, 0x23F1, 0x23F2, 0x23F3, 0x23F8, 0x23F9, 0x23FA,
+    0x0030,
+    0x0031,
+    0x0032,
+    0x0033,
+    0x0034,
+    0x0035,
+    0x0036,
+    0x0037,
+    0x0038,
+    0x0039,  # 0-9
+    0x203C,
+    0x2049,
+    0x2122,
+    0x2139,
+    0x2194,
+    0x2195,
+    0x2196,
+    0x2197,
+    0x2198,
+    0x2199,
+    0x21A9,
+    0x21AA,
+    0x231A,
+    0x231B,
+    0x2328,
+    0x23CF,
+    0x23E9,
+    0x23EA,
+    0x23EB,
+    0x23EC,
+    0x23ED,
+    0x23EE,
+    0x23EF,
+    0x23F0,
+    0x23F1,
+    0x23F2,
+    0x23F3,
+    0x23F8,
+    0x23F9,
+    0x23FA,
     0x24C2,
 }
 
@@ -102,7 +138,6 @@ def iter_emoji_spans(s: str) -> Iterable[EmojiSpan]:
             yield EmojiSpan(cluster, m.start(), m.end())
 
 
-
 def standardize_variation(emoji_text: str) -> str:
     """Normalize an emoji cluster.
 
@@ -128,8 +163,12 @@ def standardize_variation(emoji_text: str) -> str:
     for cp in filtered:
         out.append(chr(cp))
         # For characters with optional emoji presentation, append VS-16
-        if (0x2600 <= cp <= 0x26FF) or (0x2700 <= cp <= 0x27BF) or (cp in _EXTRA_EMOJI_CHARS):
-            out.append("\uFE0F")
+        if (
+            (0x2600 <= cp <= 0x26FF)
+            or (0x2700 <= cp <= 0x27BF)
+            or (cp in _EXTRA_EMOJI_CHARS)
+        ):
+            out.append("\ufe0f")
 
     return "".join(out)
 
@@ -198,8 +237,11 @@ def save_splits_to_parquet(rows_or_ds, outdir: str) -> None:
     Save splits to parquet using Hugging Face Datasets.
 
     Accepts either a list of dicts or a datasets.Dataset.
+    Uses stratified splits by label to reduce unseen-label issues.
     """
     from datasets import Dataset
+
+    label_col = "prediction"
 
     if isinstance(rows_or_ds, list):
         if not rows_or_ds:
@@ -213,22 +255,92 @@ def save_splits_to_parquet(rows_or_ds, outdir: str) -> None:
         print("No examples to write. Exiting.")
         return
 
-
     # Hard-coded split ratios and seed
-    # TRAIN_RATIO = 0.8
     EVAL_RATIO = 0.1
     TEST_RATIO = 0.1
     SEED = 42
 
     os.makedirs(outdir, exist_ok=True)
 
-    # Fixed-ratio two-step split
-    split1 = ds.train_test_split(test_size=(EVAL_RATIO + TEST_RATIO), seed=SEED)
-    train_ds = split1["train"]
-    rest = split1["test"]
-    second = rest.train_test_split(test_size=(TEST_RATIO / (EVAL_RATIO + TEST_RATIO)), seed=SEED)
-    eval_ds = second["train"]
-    test_ds = second["test"]
+    # Encode labels as ClassLabel to enable stratified split
+    try:
+        ds_enc = ds.class_encode_column(label_col)
+    except Exception as e:
+        print(f"Class encoding failed: {e}; continuing without encoding.")
+        ds_enc = ds
+
+    # First: train vs rest with stratification
+    try:
+        split1 = ds_enc.train_test_split(
+            test_size=(EVAL_RATIO + TEST_RATIO),
+            seed=SEED,
+            stratify_by_column=label_col,
+        )
+    except Exception as e:
+        print(
+            f"Stratified split (train/rest) failed: {e}; falling back to random split."
+        )
+        split1 = ds_enc.train_test_split(test_size=(EVAL_RATIO + TEST_RATIO), seed=SEED)
+
+    train_enc = split1["train"]
+    rest_enc = split1["test"]
+
+    # Second: eval vs test on the rest with stratification
+    try:
+        second = rest_enc.train_test_split(
+            test_size=(TEST_RATIO / (EVAL_RATIO + TEST_RATIO)),
+            seed=SEED,
+            stratify_by_column=label_col,
+        )
+    except Exception as e:
+        print(
+            f"Stratified split (eval/test) failed: {e}; falling back to random split."
+        )
+        second = rest_enc.train_test_split(
+            test_size=(TEST_RATIO / (EVAL_RATIO + TEST_RATIO)), seed=SEED
+        )
+
+    eval_enc = second["train"]
+    test_enc = second["test"]
+
+    # Decode labels back to strings for persistence
+    def _decode_to_str(d):
+        try:
+            feat = d.features[label_col]
+            if hasattr(feat, "int2str"):
+                return d.map(
+                    lambda batch: {
+                        label_col: [feat.int2str(v) for v in batch[label_col]]
+                    },
+                    batched=True,
+                )
+        except Exception:
+            pass
+        return d
+
+    train_ds = _decode_to_str(train_enc)
+    eval_ds = _decode_to_str(eval_enc)
+    test_ds = _decode_to_str(test_enc)
+
+    # Ensure no unseen labels in eval/test: filter to labels present in train
+    try:
+        train_labels = set(train_ds.unique(label_col))
+        before_eval, before_test = len(eval_ds), len(test_ds)
+        eval_ds = eval_ds.filter(
+            lambda batch: [v in train_labels for v in batch[label_col]], batched=True
+        )
+        test_ds = test_ds.filter(
+            lambda batch: [v in train_labels for v in batch[label_col]], batched=True
+        )
+        after_eval, after_test = len(eval_ds), len(test_ds)
+        dropped_eval = before_eval - after_eval
+        dropped_test = before_test - after_test
+        if dropped_eval or dropped_test:
+            print(
+                f"Filtered unseen labels: dropped {dropped_eval} from eval, {dropped_test} from test"
+            )
+    except Exception:
+        pass
 
     for name, d in [("train", train_ds), ("eval", eval_ds), ("test", test_ds)]:
         path = os.path.join(outdir, f"{name}.parquet")
@@ -238,6 +350,7 @@ def save_splits_to_parquet(rows_or_ds, outdir: str) -> None:
 
 # ---------------------- CLI ----------------------
 
+
 def validate_input_txt_path(path: str) -> str:
     """Require an existing .txt file; no guessing."""
     if os.path.isfile(path) and path.lower().endswith(".txt"):
@@ -246,10 +359,20 @@ def validate_input_txt_path(path: str) -> str:
 
 
 def main(argv: List[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Preprocess emoji tweet data to parquet train/eval/test")
-    ap.add_argument("--input", default="data/raw/emojitweets-01-04-2018.txt", help="Path to raw tweets .txt (one per line)")
-    ap.add_argument("--outdir", default="data/processed", help="Output directory for parquet files")
-    ap.add_argument("--num-proc", type=int, default=6, help="Processes for parallel map (datasets)")
+    ap = argparse.ArgumentParser(
+        description="Preprocess emoji tweet data to parquet train/eval/test"
+    )
+    ap.add_argument(
+        "--input",
+        default="data/raw/emojitweets-01-04-2018.txt",
+        help="Path to raw tweets .txt (one per line)",
+    )
+    ap.add_argument(
+        "--outdir", default="data/processed", help="Output directory for parquet files"
+    )
+    ap.add_argument(
+        "--num-proc", type=int, default=6, help="Processes for parallel map (datasets)"
+    )
 
     args = ap.parse_args(argv)
     in_path = validate_input_txt_path(args.input)
@@ -261,8 +384,15 @@ def main(argv: List[str] | None = None) -> int:
     from datasets import load_dataset, Dataset
 
     ds_in = cast(Dataset, load_dataset("text", data_files=in_path, split="train"))
-    num_proc = args.num_proc if getattr(args, "num_proc", None) and args.num_proc > 0 else 6
-    ds_examples = ds_in.map(expand_examples_batch, batched=True, num_proc=num_proc, remove_columns=ds_in.column_names)
+    num_proc = (
+        args.num_proc if getattr(args, "num_proc", None) and args.num_proc > 0 else 6
+    )
+    ds_examples = ds_in.map(
+        expand_examples_batch,
+        batched=True,
+        num_proc=num_proc,
+        remove_columns=ds_in.column_names,
+    )
     print(f"Built {len(ds_examples)} examples")
     save_splits_to_parquet(ds_examples, args.outdir)
     return 0

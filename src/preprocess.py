@@ -222,11 +222,6 @@ def save_splits_to_parquet(rows_or_ds, outdir: str) -> None:
 
     os.makedirs(outdir, exist_ok=True)
 
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    ds = ds.shuffle(seed=SEED)
-
     # Fixed-ratio two-step split
     split1 = ds.train_test_split(test_size=(EVAL_RATIO + TEST_RATIO), seed=SEED)
     train_ds = split1["train"]
@@ -237,9 +232,7 @@ def save_splits_to_parquet(rows_or_ds, outdir: str) -> None:
 
     for name, d in [("train", train_ds), ("eval", eval_ds), ("test", test_ds)]:
         path = os.path.join(outdir, f"{name}.parquet")
-        data = [{"before": b, "prediction": p, "after": a} for b, p, a in zip(d["before"], d["prediction"], d["after"])]
-        table = pa.Table.from_pylist(data)
-        pq.write_table(table, path)
+        d.to_parquet(path, compression=None)
         print(f"Wrote {len(d):6d} rows -> {path}")
 
 
@@ -269,8 +262,7 @@ def main(argv: List[str] | None = None) -> int:
 
     ds_in = cast(Dataset, load_dataset("text", data_files=in_path, split="train"))
     num_proc = args.num_proc if getattr(args, "num_proc", None) and args.num_proc > 0 else 6
-    ds_examples = ds_in.map(expand_examples_batch, batched=True, num_proc=num_proc)
-    ds_examples = ds_examples.select_columns(["before", "prediction", "after"])
+    ds_examples = ds_in.map(expand_examples_batch, batched=True, num_proc=num_proc, remove_columns=ds_in.column_names)
     print(f"Built {len(ds_examples)} examples")
     save_splits_to_parquet(ds_examples, args.outdir)
     return 0
